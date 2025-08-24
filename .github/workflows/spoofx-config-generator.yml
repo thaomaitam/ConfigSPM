@@ -1,0 +1,401 @@
+# SpoofXManager Config Generator Workflow
+# Advanced Automation Pipeline for Device Configuration Generation
+# Enhanced Multi-Source Prop File Processing System
+
+name: 'SpoofXManager Config Generator'
+
+on:
+  # *** ENHANCED: Manual trigger với custom prop file input ***
+  workflow_dispatch:
+    inputs:
+      custom_prop_url:
+        description: 'Custom vendor-build.prop URL'
+        required: false
+        type: string
+        default: ''
+      device_name:
+        description: 'Device identifier (optional)'
+        required: false
+        type: string
+        default: 'auto-detect'
+      config_mode:
+        description: 'Configuration mode'
+        required: true
+        type: choice
+        default: 'standard'
+        options:
+          - 'standard'
+          - 'advanced'
+          - 'minimal'
+      generate_all:
+        description: 'Generate configs for all predefined devices'
+        required: false
+        type: boolean
+        default: false
+  
+  # *** ENHANCED: Scheduled execution for automatic updates ***
+  schedule:
+    - cron: '0 2 * * 0'  # Weekly execution at 2 AM UTC Sunday
+  
+  # *** ENHANCED: Repository triggers ***
+  push:
+    branches:
+      - main
+    paths:
+      - 'scripts/SpoofXManager.sh'
+      - '.github/workflows/spoofx-config-generator.yml'
+
+env:
+  # *** CRITICAL: Predefined device database ***
+  DEVICE_DATABASE: |
+    {
+      "pixel9pro": {
+        "name": "Google Pixel 9 Pro",
+        "vendor_prop": "https://dumps.tadiphone.dev/dumps/google/caiman/-/raw/caiman-user-15-BP1A.250405.005.A1-13151424-release-keys/vendor/build.prop?ref_type=heads&inline=false",
+        "build_prop": "https://dumps.tadiphone.dev/dumps/google/caiman/-/raw/caiman-user-15-BP1A.250405.005.A1-13151424-release-keys/system/build.prop?ref_type=heads&inline=false"
+      },
+      "pixel8pro": {
+        "name": "Google Pixel 8 Pro",
+        "vendor_prop": "https://dumps.tadiphone.dev/dumps/google/husky/-/raw/husky-user-14-UQ1A.240205.004-11269751-release-keys/vendor/build.prop?ref_type=heads&inline=false",
+        "build_prop": "https://dumps.tadiphone.dev/dumps/google/husky/-/raw/husky-user-14-UQ1A.240205.004-11269751-release-keys/system/build.prop?ref_type=heads&inline=false"
+      },
+      "galaxys24ultra": {
+        "name": "Samsung Galaxy S24 Ultra",
+        "vendor_prop": "https://dumps.tadiphone.dev/dumps/samsung/dm3q/-/raw/dm3q-user-14-UP1A.231005.007-S928BXXU1AXA6-release-keys/vendor/build.prop?ref_type=heads&inline=false",
+        "build_prop": "https://dumps.tadiphone.dev/dumps/samsung/dm3q/-/raw/dm3q-user-14-UP1A.231005.007-S928BXXU1AXA6-release-keys/system/build.prop?ref_type=heads&inline=false"
+      }
+    }
+
+jobs:
+  generate-configs:
+    name: 'Generate SpoofXManager Configurations'
+    runs-on: ubuntu-latest
+    
+    strategy:
+      # *** ENHANCED: Matrix strategy for multi-device processing ***
+      matrix:
+        include:
+          - device_id: "pixel9pro"
+            device_name: "Google Pixel 9 Pro"
+          - device_id: "pixel8pro" 
+            device_name: "Google Pixel 8 Pro"
+          - device_id: "galaxys24ultra"
+            device_name: "Samsung Galaxy S24 Ultra"
+      # *** CRITICAL: Allow partial failures for resilient execution ***
+      fail-fast: false
+      max-parallel: 3
+    
+    steps:
+      # *** STAGE 1: Environment Setup và Repository Preparation ***
+      - name: 'Checkout Repository'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: 'Setup Advanced Environment'
+        run: |
+          # *** ENHANCED: System preparation với comprehensive tooling ***
+          sudo apt-get update -qq
+          sudo apt-get install -y curl wget jq sed grep coreutils
+          
+          # *** CRITICAL: Create working directory structure ***
+          mkdir -p {prop_files,generated_configs,logs,temp}
+          
+          echo "=== SpoofXManager Workflow Environment ==="
+          echo "Runner OS: $(uname -a)"
+          echo "Working Directory: $(pwd)"
+          echo "Matrix Device: ${{ matrix.device_id }}"
+          echo "Manual Input URL: ${{ github.event.inputs.custom_prop_url }}"
+          echo "=================================="
+      
+      # *** STAGE 2: Prop File Acquisition và Validation ***
+      - name: 'Acquire Prop Files - ${{ matrix.device_name }}'
+        id: prop_acquisition
+        run: |
+          set -e
+          
+          # *** ENHANCED: Dynamic prop file acquisition logic ***
+          DEVICE_ID="${{ matrix.device_id }}"
+          CUSTOM_URL="${{ github.event.inputs.custom_prop_url }}"
+          
+          # *** CRITICAL: Determine prop file source ***
+          if [[ -n "$CUSTOM_URL" && "${{ github.event.inputs.generate_all }}" != "true" ]]; then
+            echo "=== Using Custom Prop File URL ==="
+            VENDOR_PROP_URL="$CUSTOM_URL"
+            echo "vendor_prop_url=$VENDOR_PROP_URL" >> $GITHUB_OUTPUT
+          else
+            echo "=== Using Predefined Device Database ==="
+            
+            # *** ENHANCED: Extract device URLs from database ***
+            VENDOR_PROP_URL=$(echo '${{ env.DEVICE_DATABASE }}' | jq -r ".${DEVICE_ID}.vendor_prop // empty")
+            BUILD_PROP_URL=$(echo '${{ env.DEVICE_DATABASE }}' | jq -r ".${DEVICE_ID}.build_prop // empty")
+            
+            if [[ -z "$VENDOR_PROP_URL" ]]; then
+              echo "❌ Device $DEVICE_ID not found in database"
+              exit 1
+            fi
+            
+            echo "vendor_prop_url=$VENDOR_PROP_URL" >> $GITHUB_OUTPUT
+            echo "build_prop_url=$BUILD_PROP_URL" >> $GITHUB_OUTPUT
+          fi
+          
+          echo "Device: ${{ matrix.device_name }}"
+          echo "Vendor Prop URL: $VENDOR_PROP_URL"
+          echo "Build Prop URL: ${BUILD_PROP_URL:-N/A}"
+          
+          # *** ENHANCED: Download với comprehensive error handling ***
+          download_prop_file() {
+            local url="$1"
+            local filename="$2"
+            local max_retries=3
+            local retry_delay=10
+            
+            for ((i=1; i<=max_retries; i++)); do
+              echo "Downloading $filename (Attempt $i/$max_retries)..."
+              
+              if curl -L -f -o "prop_files/$filename" \
+                      -H "User-Agent: SpoofXManager-ConfigGenerator/2.0" \
+                      -H "Accept: text/plain" \
+                      --connect-timeout 30 \
+                      --max-time 120 \
+                      "$url"; then
+                echo "✅ Successfully downloaded $filename"
+                return 0
+              else
+                echo "❌ Download failed (Attempt $i/$max_retries)"
+                if [[ $i -lt $max_retries ]]; then
+                  echo "Retrying in $retry_delay seconds..."
+                  sleep $retry_delay
+                fi
+              fi
+            done
+            
+            return 1
+          }
+          
+          # *** CRITICAL: Download vendor-build.prop ***
+          if ! download_prop_file "$VENDOR_PROP_URL" "vendor-build.prop"; then
+            echo "❌ Failed to download vendor-build.prop after $max_retries attempts"
+            exit 1
+          fi
+          
+          # *** OPTIONAL: Download build.prop if available ***
+          if [[ -n "$BUILD_PROP_URL" ]]; then
+            download_prop_file "$BUILD_PROP_URL" "build.prop" || echo "⚠️  build.prop download failed, continuing with vendor-build.prop only"
+          fi
+          
+          # *** ENHANCED: Prop file validation ***
+          echo "=== Prop File Validation ==="
+          for prop_file in prop_files/*.prop; do
+            if [[ -f "$prop_file" ]]; then
+              echo "File: $(basename "$prop_file")"
+              echo "Size: $(stat -c%s "$prop_file") bytes"
+              echo "Lines: $(wc -l < "$prop_file")"
+              
+              # *** CRITICAL: Validate essential properties ***
+              if grep -q "ro.build.fingerprint\|ro.vendor.build.fingerprint" "$prop_file"; then
+                echo "✅ Fingerprint property found"
+              else
+                echo "❌ No fingerprint property found"
+                exit 1
+              fi
+            fi
+          done
+      
+      # *** STAGE 3: Config Generation với SpoofXManager Script ***
+      - name: 'Generate SpoofXManager Config - ${{ matrix.device_name }}'
+        id: config_generation
+        run: |
+          set -e
+          
+          echo "=== SpoofXManager Config Generation ==="
+          
+          # *** ENHANCED: Prepare generation script ***
+          if [[ ! -f "SpoofXManager.sh" ]]; then
+            echo "❌ SpoofXManager.sh script not found"
+            exit 1
+          fi
+          
+          # *** CRITICAL: Make script executable ***
+          chmod +x SpoofXManager.sh
+          
+          # *** ENHANCED: Move to prop files directory và execute ***
+          cd prop_files
+          
+          # *** CRITICAL: Determine config mode ***
+          CONFIG_MODE="${{ github.event.inputs.config_mode || 'standard' }}"
+          case "$CONFIG_MODE" in
+            "advanced") SCRIPT_ARGS="advanced" ;;
+            "minimal") SCRIPT_ARGS="minimal" ;;
+            *) SCRIPT_ARGS="" ;;
+          esac
+          
+          echo "Config Mode: $CONFIG_MODE"
+          echo "Script Args: $SCRIPT_ARGS"
+          
+          # *** ENHANCED: Execute generation với comprehensive logging ***
+          if ../SpoofXManager.sh $SCRIPT_ARGS 2>&1 | tee ../logs/generation_${{ matrix.device_id }}.log; then
+            echo "✅ Config generation completed successfully"
+            
+            # *** CRITICAL: Validate generated config ***
+            if [[ -f "config.json" ]]; then
+              echo "✅ config.json generated"
+              echo "Size: $(stat -c%s config.json) bytes"
+              
+              # *** ENHANCED: JSON validation ***
+              if jq . config.json > /dev/null 2>&1; then
+                echo "✅ JSON validation passed"
+                
+                # *** CRITICAL: Move to output directory ***
+                mv config.json "../generated_configs/config_${{ matrix.device_id }}.json"
+                echo "config_file=generated_configs/config_${{ matrix.device_id }}.json" >> $GITHUB_OUTPUT
+              else
+                echo "❌ JSON validation failed"
+                exit 1
+              fi
+            else
+              echo "❌ config.json not generated"
+              exit 1
+            fi
+          else
+            echo "❌ Config generation failed"
+            exit 1
+          fi
+          
+          cd ..
+      
+      # *** STAGE 4: Advanced Config Analysis và Validation ***
+      - name: 'Analyze Generated Config - ${{ matrix.device_name }}'
+        run: |
+          CONFIG_FILE="generated_configs/config_${{ matrix.device_id }}.json"
+          
+          if [[ -f "$CONFIG_FILE" ]]; then
+            echo "=== Config Analysis for ${{ matrix.device_name }} ==="
+            
+            # *** ENHANCED: Extract key information ***
+            BRAND=$(jq -r '.[].BRAND // "Unknown"' "$CONFIG_FILE" | head -1)
+            MODEL=$(jq -r '.[].MODEL // "Unknown"' "$CONFIG_FILE" | head -1)
+            ANDROID_VERSION=$(jq -r '.[].RELEASE // "Unknown"' "$CONFIG_FILE" | head -1)
+            API_LEVEL=$(jq -r '.[].SDK // "Unknown"' "$CONFIG_FILE" | head -1)
+            SECURITY_PATCH=$(jq -r '.[].SECURITY_PATCH // "Unknown"' "$CONFIG_FILE" | head -1)
+            
+            echo "Brand: $BRAND"
+            echo "Model: $MODEL"
+            echo "Android Version: $ANDROID_VERSION (API $API_LEVEL)"
+            echo "Security Patch: $SECURITY_PATCH"
+            
+            # *** CRITICAL: Property count validation ***
+            PROPERTY_COUNT=$(jq -r '.[].BRAND, .[].MODEL, .[].DEVICE, .[].FINGERPRINT' "$CONFIG_FILE" | grep -v "null" | grep -v "Unknown" | wc -l)
+            echo "Valid Properties: $PROPERTY_COUNT/4 core properties"
+            
+            if [[ $PROPERTY_COUNT -ge 3 ]]; then
+              echo "✅ Config validation passed"
+            else
+              echo "❌ Config validation failed - insufficient properties"
+              exit 1
+            fi
+          else
+            echo "❌ Config file not found: $CONFIG_FILE"
+            exit 1
+          fi
+      
+      # *** STAGE 5: Artifact Management và Repository Integration ***
+      - name: 'Upload Generated Configs'
+        uses: actions/upload-artifact@v4
+        with:
+          name: 'spoofx-config-${{ matrix.device_id }}'
+          path: |
+            generated_configs/config_${{ matrix.device_id }}.json
+            logs/generation_${{ matrix.device_id }}.log
+          retention-days: 30
+          compression-level: 9
+      
+      # *** STAGE 6: Optional Repository Commit (for main branch) ***
+      - name: 'Commit Generated Configs'
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        run: |
+          # *** ENHANCED: Git configuration ***
+          git config --local user.email "action@github.com"
+          git config --local user.name "SpoofXManager ConfigGen"
+          
+          # *** CRITICAL: Add generated files ***
+          if [[ -f "generated_configs/config_${{ matrix.device_id }}.json" ]]; then
+            git add "generated_configs/config_${{ matrix.device_id }}.json"
+            
+            # *** ENHANCED: Commit với detailed message ***
+            if ! git diff --cached --quiet; then
+              git commit -m "🤖 Auto-generate SpoofXManager config for ${{ matrix.device_name }}
+
+              - Device: ${{ matrix.device_name }}
+              - Matrix ID: ${{ matrix.device_id }}  
+              - Config Mode: ${{ github.event.inputs.config_mode || 'standard' }}
+              - Workflow: ${{ github.workflow }}
+              - Run ID: ${{ github.run_id }}
+              
+              Generated via automated workflow on $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+              
+              echo "✅ Changes committed successfully"
+            else
+              echo "ℹ️  No changes to commit"
+            fi
+          fi
+
+  # *** ENHANCED: Consolidation Job για Multi-Device Results ***
+  consolidate-results:
+    name: 'Consolidate Generation Results'
+    runs-on: ubuntu-latest
+    needs: generate-configs
+    if: always()
+    
+    steps:
+      - name: 'Download All Artifacts'
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      
+      - name: 'Generate Summary Report'
+        run: |
+          echo "# SpoofXManager Config Generation Summary" > summary.md
+          echo "" >> summary.md
+          echo "**Workflow Run:** ${{ github.run_id }}" >> summary.md
+          echo "**Trigger:** ${{ github.event_name }}" >> summary.md
+          echo "**Date:** $(date -u +'%Y-%m-%d %H:%M:%S UTC')" >> summary.md
+          echo "" >> summary.md
+          echo "## Generated Configurations" >> summary.md
+          echo "" >> summary.md
+          
+          # *** ENHANCED: Artifact analysis ***
+          for artifact_dir in artifacts/spoofx-config-*; do
+            if [[ -d "$artifact_dir" ]]; then
+              DEVICE_ID=$(basename "$artifact_dir" | sed 's/spoofx-config-//')
+              CONFIG_FILE="$artifact_dir/config_${DEVICE_ID}.json"
+              
+              if [[ -f "$CONFIG_FILE" ]]; then
+                echo "### Device: $DEVICE_ID" >> summary.md
+                echo "- ✅ **Status:** Success" >> summary.md
+                echo "- **Config File:** \`config_${DEVICE_ID}.json\`" >> summary.md
+                echo "- **File Size:** $(stat -c%s "$CONFIG_FILE") bytes" >> summary.md
+                echo "" >> summary.md
+              else
+                echo "### Device: $DEVICE_ID" >> summary.md
+                echo "- ❌ **Status:** Failed" >> summary.md
+                echo "" >> summary.md
+              fi
+            fi
+          done
+          
+          echo "## Workflow Statistics" >> summary.md
+          echo "- **Total Devices Processed:** $(find artifacts -name "*.json" | wc -l)" >> summary.md
+          echo "- **Successful Generations:** $(find artifacts -name "config_*.json" | wc -l)" >> summary.md
+          echo "- **Total Artifacts:** $(find artifacts -type f | wc -l)" >> summary.md
+          
+          # *** CRITICAL: Display summary ***
+          cat summary.md
+      
+      - name: 'Upload Consolidated Summary'
+        uses: actions/upload-artifact@v4
+        with:
+          name: 'spoofx-generation-summary'
+          path: summary.md
+          retention-days: 90
